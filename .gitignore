@@ -50,3 +50,24 @@ htmlcov/
 ~$*.xlsm
 ~$*.xlsx
 
+# Project specific - exclude large data files and settings
+*.xlsx
+*.xlsm
+*.csv
+saved_settings.json
+.cursor/
+
+# PDF reports (can be large) - exclude but keep if needed for documentation
+# *.pdf
+
+# Word documents
+*.docx
+
+# Icons and logos (can be large)
+*.ico
+*.svg
+
+# Shortcuts
+*.lnk
+*.vbs
+

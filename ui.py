@@ -1265,23 +1265,12 @@ def run_analysis_job(payload: dict, status_placeholder=None, progress_bar=None):
         raise ValueError("Optimierungsliste ist leer.")
 
     criterion = params.get('optimization_criterion', 'Deckungsbeitrag III gesamt (Barwert)')
+    # Nur DB Barwert und DB Nominal unterstützen
     if criterion == "Deckungsbeitrag III gesamt (Nominal)":
         best_idx = df_results['total_db3_nominal'].idxmax()
         criterion_value = df_results.loc[best_idx, 'total_db3_nominal']
         criterion_name = "DB III gesamt (Nominal)"
-    elif criterion == "Amortisationszeit":
-        best_idx = df_results['payback_period_years'].idxmin()
-        criterion_value = df_results.loc[best_idx, 'payback_period_years']
-        criterion_name = "Amortisationszeit"
-    elif criterion == "Return on Investment (ROI)":
-        best_idx = df_results['roi_percentage'].idxmax()
-        criterion_value = df_results.loc[best_idx, 'roi_percentage']
-        criterion_name = "ROI"
-    elif criterion == "Net Present Value (NPV)":
-        best_idx = df_results['npv'].idxmax()
-        criterion_value = df_results.loc[best_idx, 'npv']
-        criterion_name = "NPV"
-    else:
+    else:  # Default: Deckungsbeitrag III gesamt (Barwert)
         best_idx = df_results['total_db3_present_value'].idxmax()
         criterion_value = df_results.loc[best_idx, 'total_db3_present_value']
         criterion_name = "DB III gesamt (Barwert)"
@@ -1515,14 +1504,38 @@ if saved_configs:
         key="config_selector"
     )
     
+    # Prüfe ob eine neue Konfiguration ausgewählt wurde
+    if 'last_loaded_config' not in st.session_state:
+        st.session_state['last_loaded_config'] = None
+    
+    # Wenn eine neue Konfiguration ausgewählt wurde, lade sie
     if selected_config != "-- Neue Konfiguration --":
-        loaded_settings = settings_manager.load_configuration(selected_config)
-        if loaded_settings:
-            st.sidebar.success(f"Konfiguration '{selected_config}' geladen")
-            config_link = loaded_settings.get('pv_data_source_link')
-            if config_link is not None:
-                st.session_state['pv_data_source_link_input'] = config_link
-                save_pv_link_to_file(config_link)
+        if st.session_state['last_loaded_config'] != selected_config:
+            # Neue Konfiguration wurde ausgewählt - lade sie
+            loaded_settings = settings_manager.load_configuration(selected_config)
+            if loaded_settings:
+                st.session_state['last_loaded_config'] = selected_config
+                st.session_state['loaded_config_settings'] = loaded_settings.copy()
+                # Zurücksetzen des "angewendet"-Flags, damit neue Werte verwendet werden
+                if 'config_applied' in st.session_state:
+                    del st.session_state['config_applied']
+                if 'applied_config_name' in st.session_state:
+                    del st.session_state['applied_config_name']
+                st.sidebar.success(f"✅ Konfiguration '{selected_config}' geladen. Sie können die Werte jetzt anpassen.")
+                config_link = loaded_settings.get('pv_data_source_link')
+                if config_link is not None:
+                    st.session_state['pv_data_source_link_input'] = config_link
+                    save_pv_link_to_file(config_link)
+    else:
+        # Keine Konfiguration ausgewählt - zurücksetzen
+        if 'last_loaded_config' in st.session_state:
+            st.session_state['last_loaded_config'] = None
+        if 'loaded_config_settings' in st.session_state:
+            del st.session_state['loaded_config_settings']
+        if 'config_applied' in st.session_state:
+            del st.session_state['config_applied']
+        if 'applied_config_name' in st.session_state:
+            del st.session_state['applied_config_name']
     
     # Konfiguration verwalten
     col1, col2 = st.sidebar.columns(2)
@@ -1608,12 +1621,21 @@ if not analysis_ready:
     else:
         st.sidebar.success("Separate Verbrauchs- und Erzeugungsdaten erfolgreich geladen.")
         
-        # Geladene Einstellungen verwenden
+        # Geladene Einstellungen verwenden - nur wenn eine Konfiguration geladen wurde
+        # und noch nicht angewendet wurde (nur beim ersten Laden)
         loaded_settings = None
         if 'config_selector' in st.session_state:
             selected_config = st.session_state.config_selector
-        if selected_config != "-- Neue Konfiguration --":
-            loaded_settings = settings_manager.load_configuration(selected_config)
+            # Verwende gespeicherte Einstellungen nur wenn eine Konfiguration aktiv ist
+            if selected_config != "-- Neue Konfiguration --" and 'loaded_config_settings' in st.session_state:
+                # Verwende die gespeicherten Einstellungen nur beim ersten Laden
+                # Danach werden die aktuellen UI-Eingaben verwendet
+                if 'config_applied' not in st.session_state or st.session_state.get('applied_config_name') != selected_config:
+                    loaded_settings = st.session_state['loaded_config_settings']
+                    st.session_state['config_applied'] = True
+                    st.session_state['applied_config_name'] = selected_config
+                # Nach dem ersten Laden: loaded_settings bleibt None, damit aktuelle UI-Werte als Default verwendet werden
+                # Die UI-Eingabefelder behalten ihre Werte durch Streamlit's State-Management
 
     # --- Allgemeine Parameter ---
         st.sidebar.markdown("""
@@ -1694,10 +1716,12 @@ if not analysis_ready:
         
         number_of_persons = st.sidebar.number_input(
             "Anzahl Haushalte", min_value=1, max_value=50, value=default_persons, step=1,
+            key="ui_number_of_persons",
             help="Anzahl der Haushalte (nicht Personen). Jeder Haushalt wird mit dem unten angegebenen jährlichen Durchschnittsverbrauch pro Haushalt berechnet."
         )
         pv_system_size_kwp = st.sidebar.number_input(
             "PV-Anlagengröße (kWp)", min_value=0.1, max_value=100.0, value=default_pv_size, step=0.1,
+            key="ui_pv_system_size_kwp",
             help="Die Größe Ihrer PV-Anlage in kWp. Wird für den Bericht verwendet. Ihre PV-Daten sollten bereits für diese Anlagengröße berechnet sein."
         )
         
@@ -1709,6 +1733,7 @@ if not analysis_ready:
         annual_consumption_per_household = st.sidebar.number_input(
             "Jährlicher Durchschnittsverbrauch pro Haushalt (kWh)", 
             min_value=1000, max_value=20000, value=default_annual_consumption, step=100,
+            key="ui_annual_consumption_per_household",
             help="Der durchschnittliche jährliche Stromverbrauch eines Haushalts. Wird für die Verbrauchsaufschlüsselung und Berechnungen benötigt."
         )
         
@@ -1735,6 +1760,7 @@ if not analysis_ready:
             value=float(default_charge_eff * 100), 
             step=0.1,
             format="%.1f",
+            key="ui_battery_efficiency_charge",
             help="Wirkungsgrad beim Laden der Batterie. Typische Werte: 92-98%"
         ) / 100
         battery_efficiency_discharge = st.sidebar.number_input(
@@ -1744,6 +1770,7 @@ if not analysis_ready:
             value=float(default_discharge_eff * 100), 
             step=0.1,
             format="%.1f",
+            key="ui_battery_efficiency_discharge",
             help="Wirkungsgrad beim Entladen der Batterie. Typische Werte: 92-98%"
         ) / 100
         # Lade-/Entladeleistung: keine manuelle Eingabe – aus Excel je Kapazität
@@ -1753,6 +1780,7 @@ if not analysis_ready:
         default_initial_soc = loaded_settings.get('initial_soc_percent', 50.0) if loaded_settings else 50.0
         initial_soc_percent = st.sidebar.slider(
             "Initialer Ladezustand Batterie (%)", min_value=0, max_value=100, value=int(default_initial_soc), step=1,
+            key="ui_initial_soc_percent",
             help="Ladezustand der Batterie zu Beginn der Simulation. 50% ist ein realistischer Standardwert."
         )
         
@@ -1764,11 +1792,13 @@ if not analysis_ready:
         with col1:
             min_soc_percent = st.sidebar.slider(
                 "Min. Ladezustand (%)", min_value=0, max_value=50, value=int(default_min_soc), step=1,
+                key="ui_min_soc_percent",
                 help="Minimaler Ladezustand der Batterie. 0% = Keine Untergrenze (nicht empfohlen)."
             )
         with col2:
             max_soc_percent = st.sidebar.slider(
                 "Max. Ladezustand (%)", min_value=50, max_value=100, value=int(default_max_soc), step=1,
+                key="ui_max_soc_percent",
                 help="Maximaler Ladezustand der Batterie. 100% = Keine Obergrenze (nicht empfohlen)."
             )
         
@@ -1782,6 +1812,7 @@ if not analysis_ready:
         default_capacity_loss = loaded_settings.get('annual_capacity_loss_percent', 1.0) if loaded_settings else 1.0
         annual_capacity_loss_percent = st.sidebar.slider(
             "Jährlicher Kapazitätsverlust (%)", min_value=0.0, max_value=10.0, value=default_capacity_loss, step=0.1,
+            key="ui_annual_capacity_loss_percent",
             help="Jährlicher Kapazitätsverlust der Batterie durch Alterung. Der Wert ist frei wählbar und entspricht dem eingegebenen Wert. Typische Werte für moderne Lithium-Ionen-Batterien liegen zwischen 0.5% und 2% pro Jahr."
         )
 
@@ -1803,6 +1834,7 @@ if not analysis_ready:
             max_value=200.0, 
             value=default_min_capacity, 
             step=1.0,
+            key="ui_min_battery_capacity",
             help="Minimale zu untersuchende Batteriekapazität. Kann gleich der maximalen sein für eine einzelne Größe."
         )
         max_battery_capacity = st.sidebar.number_input(
@@ -1811,6 +1843,7 @@ if not analysis_ready:
             max_value=200.0, 
             value=default_max_capacity, 
             step=1.0,
+            key="ui_max_battery_capacity",
             help="Maximale zu untersuchende Batteriekapazität. Kann gleich der minimalen sein für eine einzelne Größe."
         )
         battery_step_size = st.sidebar.number_input(
@@ -1819,6 +1852,7 @@ if not analysis_ready:
             max_value=5.0, 
             value=default_step_size, 
             step=0.5,
+            key="ui_battery_step_size",
             help="Schrittweite für die Optimierung. Bei min=max wird die Schrittweite ignoriert."
         )
         
@@ -1829,19 +1863,16 @@ if not analysis_ready:
         
         # Optimierungskriterium
         default_optimization_criterion = loaded_settings.get('optimization_criterion', 'Deckungsbeitrag III gesamt (Barwert)') if loaded_settings else 'Deckungsbeitrag III gesamt (Barwert)'
+        # Stelle sicher, dass nur gültige Optionen verwendet werden
+        if default_optimization_criterion not in ['Deckungsbeitrag III gesamt (Barwert)', 'Deckungsbeitrag III gesamt (Nominal)']:
+            default_optimization_criterion = 'Deckungsbeitrag III gesamt (Barwert)'
         optimization_criterion = st.sidebar.selectbox(
             "Optimierungskriterium",
             options=[
                 "Deckungsbeitrag III gesamt (Barwert)",
-                "Deckungsbeitrag III gesamt (Nominal)",
-                "Amortisationszeit",
-                "Return on Investment (ROI)",
-                "Net Present Value (NPV)"
+                "Deckungsbeitrag III gesamt (Nominal)"
             ],
-            index=0 if default_optimization_criterion == 'Deckungsbeitrag III gesamt (Barwert)' else 
-                 1 if default_optimization_criterion == 'Deckungsbeitrag III gesamt (Nominal)' else
-                 2 if default_optimization_criterion == 'Amortisationszeit' else
-                 3 if default_optimization_criterion == 'Return on Investment (ROI)' else 4,
+            index=0 if default_optimization_criterion == 'Deckungsbeitrag III gesamt (Barwert)' else 1,
             help="Wählen Sie das Kriterium für die optimale Batteriespeichergröße. DB III gesamt maximiert den Gesamtgewinn über die Projektlaufzeit."
         )
 
@@ -1857,10 +1888,12 @@ if not analysis_ready:
         default_feed_in_price = loaded_settings.get('price_feed_in_per_kwh', 0.08) if loaded_settings else 0.08
         
         price_grid_per_kwh = st.sidebar.number_input(
-            "Strombezugspreis (ct/kWh)", min_value=10.0, max_value=50.0, value=default_grid_price * 100, step=0.5
+            "Strombezugspreis (ct/kWh)", min_value=10.0, max_value=50.0, value=default_grid_price * 100, step=0.5,
+            key="ui_price_grid_per_kwh"
         ) / 100
         price_feed_in_per_kwh = st.sidebar.number_input(
-            "Einspeisevergütung (ct/kWh)", min_value=5.0, max_value=20.0, value=default_feed_in_price * 100, step=0.5
+            "Einspeisevergütung (ct/kWh)", min_value=5.0, max_value=20.0, value=default_feed_in_price * 100, step=0.5,
+            key="ui_price_feed_in_per_kwh"
         ) / 100
 
         # --- Finanzielle Parameter ---
@@ -1876,13 +1909,16 @@ if not analysis_ready:
         default_db_interest = loaded_settings.get('project_interest_rate_db', 0.03) if loaded_settings else 0.03
         
         project_lifetime_years = st.sidebar.slider(
-            "Projektlaufzeit (Jahre)", min_value=5, max_value=30, value=default_lifetime, step=1
+            "Projektlaufzeit (Jahre)", min_value=5, max_value=30, value=default_lifetime, step=1,
+            key="ui_project_lifetime_years"
         )
         discount_rate = st.sidebar.slider(
-            "Diskontierungsrate (%)", min_value=0.0, max_value=10.0, value=default_discount * 100, step=0.1
+            "Diskontierungsrate (%)", min_value=0.0, max_value=10.0, value=default_discount * 100, step=0.1,
+            key="ui_discount_rate"
         ) / 100
         project_interest_rate_db = st.sidebar.slider(
-            "Projektzins für DB Kalkulation (%)", min_value=0.0, max_value=10.0, value=default_db_interest * 100, step=0.1
+            "Projektzins für DB Kalkulation (%)", min_value=0.0, max_value=10.0, value=default_db_interest * 100, step=0.1,
+            key="ui_project_interest_rate_db"
         ) / 100
 
         # --- Einstellungen speichern ---
@@ -2018,12 +2054,17 @@ if not analysis_ready:
             st.rerun()
 
 else:
-    st.sidebar.info("✅ Analyse abgeschlossen – nutze die Auswertung unten. Für eine neue Analyse bitte auf „Analyse zurücksetzen“ klicken.")
+    st.sidebar.info("✅ Analyse abgeschlossen – nutze die Auswertung unten. Für eine neue Analyse bitte auf 'Analyse zurücksetzen' klicken.")
     if st.sidebar.button("🔄 Analyse zurücksetzen", use_container_width=True):
         reset_analysis_results()
         st.session_state['analysis_state'] = 'idle'
         st.session_state['analysis_error'] = None
         st.session_state['analysis_completed'] = False
+        # Zurücksetzen der Konfiguration, damit aktuelle UI-Eingaben verwendet werden
+        if 'config_applied' in st.session_state:
+            del st.session_state['config_applied']
+        if 'applied_config_name' in st.session_state:
+            del st.session_state['applied_config_name']
         st.rerun()
 
 # ==== Persistente Energiefluss-Ansicht (Plotly Range Controls) ====
@@ -2261,4 +2302,5 @@ if analysis_ready and all(k in st.session_state for k in excel_keys):
         st.session_state['original_consumption_series'],
         st.session_state['scaled_pv_generation_series'],
         st.session_state['battery_cost_curve'],
+        st.session_state.get('results_summary'),
     )

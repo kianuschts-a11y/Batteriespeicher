@@ -1,15 +1,15 @@
-[browser]
-gatherUsageStats = false
-serverAddress = "localhost"
-
 [server]
 headless = true
-# Browser wird manuell im App-Modus vom VBScript gestartet
+port = 8501
+enableCORS = false
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats = false
 
 [theme]
 primaryColor = "#FF6B35"
-backgroundColor = "#1A1A1A"
-secondaryBackgroundColor = "#2D2D2D"
-textColor = "#FFFFFF"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F0F2F6"
+textColor = "#262730"
 font = "sans serif"
-

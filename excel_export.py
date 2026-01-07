@@ -150,11 +150,17 @@ def create_cost_comparison_png(optimal_sim_result, current_settings, optimizatio
         
         # Generiere die gleiche Grafik wie in der UI
         # Hole die optimale Batteriekapazität aus den Optimierungsergebnissen
+        # Verwende das gleiche Optimierungskriterium wie in der UI
         if optimization_results:
             import pandas as pd
             df_results = pd.DataFrame(optimization_results)
-            best_npv_idx = df_results['npv'].idxmax()
-            optimal_capacity = df_results.loc[best_npv_idx, 'battery_capacity_kwh']
+            optimization_criterion = current_settings.get('optimization_criterion', 'Deckungsbeitrag III gesamt (Barwert)')
+            # Nur DB Barwert und DB Nominal unterstützen
+            if optimization_criterion == "Deckungsbeitrag III gesamt (Nominal)":
+                best_idx = df_results['total_db3_nominal'].idxmax()
+            else:  # Default: Deckungsbeitrag III gesamt (Barwert)
+                best_idx = df_results['total_db3_present_value'].idxmax()
+            optimal_capacity = df_results.loc[best_idx, 'battery_capacity_kwh']
         else:
             optimal_capacity = current_settings.get("battery_capacity_kwh", 10.0)  # Fallback
         
@@ -1213,7 +1219,206 @@ def create_pv_generation_breakdown(pv_generation_series, pv_system_size_kwp, sel
             'annual_stats': {}
         }
 
-def create_deckungsbeitragsrechnung_sheet(wb, optimization_results, optimal_sim_result, cost_comparison_details, current_settings, battery_cost_curve=None):
+def create_amortisationszeit_sheet(wb, optimization_results, optimal_sim_result, cost_comparison_details, current_settings, battery_cost_curve=None, results_summary=None):
+    """
+    Erstellt ein detailliertes Sheet mit der Amortisationszeit-Berechnung Jahr für Jahr
+    """
+    try:
+        ws_amort = wb.create_sheet("Amortisationszeit")
+        
+        # Überschrift
+        ws_amort['A1'] = "AMORTISATIONSZEIT - DETAILLIERTE BERECHNUNG"
+        ws_amort['A1'].font = Font(size=16, bold=True, color="FF6B35")
+        ws_amort.merge_cells('A1:G1')
+        ws_amort['A1'].alignment = Alignment(horizontal='center')
+        
+        # Farben für das Styling
+        orange_fill = PatternFill(start_color="FF6B35", end_color="FF6B35", fill_type="solid")
+        light_orange_fill = PatternFill(start_color="FFB366", end_color="FFB366", fill_type="solid")
+        black_font = Font(color="000000", bold=True)
+        white_font = Font(color="FFFFFF", bold=True)
+        header_font = Font(color="000000", bold=True, size=12)
+        
+        # Hole die optimale Lösung
+        if not optimization_results:
+            ws_amort['A3'] = "Keine Optimierungsergebnisse verfügbar"
+            return
+        
+        df_results = pd.DataFrame(optimization_results)
+        optimization_criterion = current_settings.get('optimization_criterion', 'Deckungsbeitrag III gesamt (Barwert)')
+        
+        if optimization_criterion == "Deckungsbeitrag III gesamt (Nominal)":
+            best_idx = df_results['total_db3_nominal'].idxmax()
+        else:
+            best_idx = df_results['total_db3_present_value'].idxmax()
+        
+        best_option = df_results.loc[best_idx]
+        
+        # Hole Parameter
+        project_lifetime = int(current_settings.get('project_lifetime_years', 15) or 15)
+        annual_capacity_loss = float(current_settings.get('annual_capacity_loss_percent', 2.0) or 2.0)
+        
+        # Hole Investitionskosten und jährliche Ersparnisse
+        if results_summary:
+            investment_cost = results_summary.get('investment_cost', best_option.get('investment_cost', 0))
+            annual_savings = results_summary.get('annual_savings', best_option.get('annual_savings', 0))
+            payback_period = results_summary.get('payback_period_years', best_option.get('payback_period_years', 999))
+        else:
+            investment_cost = best_option.get('investment_cost', 0)
+            annual_savings = best_option.get('annual_savings', 0)
+            payback_period = best_option.get('payback_period_years', 999)
+        
+        # Übersicht
+        row = 3
+        ws_amort[f'A{row}'] = "ÜBERSICHT"
+        ws_amort[f'A{row}'].font = header_font
+        ws_amort[f'A{row}'].fill = orange_fill
+        ws_amort[f'A{row}'].font = white_font
+        ws_amort.merge_cells(f'A{row}:G{row}')
+        row += 1
+        
+        overview_data = [
+            ("Investitionskosten", f"{investment_cost:.2f} €"),
+            ("Jährliche Ersparnis (Jahr 1)", f"{annual_savings:.2f} €"),
+            ("Jährlicher Kapazitätsverlust", f"{annual_capacity_loss:.2f} %"),
+            ("Projektlaufzeit", f"{project_lifetime} Jahre"),
+            ("Amortisationszeit", f"{payback_period:.2f} Jahre" if payback_period < 999 else "Nicht erreicht")
+        ]
+        
+        for label, value in overview_data:
+            ws_amort[f'A{row}'] = label
+            ws_amort[f'B{row}'] = value
+            ws_amort[f'A{row}'].font = black_font
+            ws_amort[f'B{row}'].font = Font(bold=True)
+            row += 1
+        
+        row += 2
+        
+        # Detaillierte Berechnung Jahr für Jahr
+        ws_amort[f'A{row}'] = "DETAILLIERTE BERECHNUNG JAHR FÜR JAHR"
+        ws_amort[f'A{row}'].font = header_font
+        ws_amort[f'A{row}'].fill = orange_fill
+        ws_amort[f'A{row}'].font = white_font
+        ws_amort.merge_cells(f'A{row}:G{row}')
+        row += 1
+        
+        # Tabellen-Header
+        headers = ["Jahr", "Degradationsfaktor", "Jährliche Ersparnis (degradiert)", "Kumulierte Ersparnis", "Verbleibende Investition", "Status", "Hinweis"]
+        for col, header in enumerate(headers, 1):
+            cell = ws_amort.cell(row=row, column=col)
+            cell.value = header
+            cell.font = white_font
+            cell.fill = light_orange_fill
+            cell.alignment = Alignment(horizontal='center')
+        row += 1
+        
+        # Berechne Jahr für Jahr
+        cumulative_savings = 0
+        break_even_found = False
+        
+        for year in range(1, project_lifetime + 1):
+            # Degradation der Ersparnisse
+            degradation_factor = (1.0 - annual_capacity_loss / 100.0) ** (year - 1)
+            year_savings = annual_savings * degradation_factor
+            cumulative_savings += year_savings
+            remaining_investment = investment_cost - cumulative_savings
+            
+            # Status bestimmen
+            if cumulative_savings >= investment_cost and not break_even_found:
+                status = "✓ Amortisiert"
+                break_even_found = True
+                if year == 1:
+                    hint = f"Amortisation bereits im ersten Jahr erreicht"
+                else:
+                    previous_cumulative = cumulative_savings - year_savings
+                    remaining_before = investment_cost - previous_cumulative
+                    fraction_of_year = remaining_before / year_savings if year_savings > 0 else 0
+                    actual_payback = (year - 1) + fraction_of_year
+                    hint = f"Amortisation nach {actual_payback:.2f} Jahren erreicht"
+            elif cumulative_savings >= investment_cost:
+                status = "Weiterhin amortisiert"
+                hint = ""
+            else:
+                status = "Noch nicht amortisiert"
+                hint = f"Verbleibend: {remaining_investment:.2f} €"
+            
+            # Schreibe Daten
+            ws_amort[f'A{row}'] = year
+            ws_amort[f'B{row}'] = f"{degradation_factor:.4f}"
+            ws_amort[f'C{row}'] = f"{year_savings:.2f} €"
+            ws_amort[f'D{row}'] = f"{cumulative_savings:.2f} €"
+            ws_amort[f'E{row}'] = f"{remaining_investment:.2f} €" if remaining_investment > 0 else "0.00 €"
+            ws_amort[f'F{row}'] = status
+            ws_amort[f'G{row}'] = hint
+            
+            # Formatierung
+            ws_amort[f'A{row}'].alignment = Alignment(horizontal='center')
+            ws_amort[f'B{row}'].number_format = '0.0000'
+            ws_amort[f'C{row}'].number_format = '#,##0.00 "€"'
+            ws_amort[f'D{row}'].number_format = '#,##0.00 "€"'
+            ws_amort[f'E{row}'].number_format = '#,##0.00 "€"'
+            
+            # Hervorhebung bei Amortisation
+            if break_even_found and cumulative_savings >= investment_cost and year <= payback_period + 1:
+                for col in ['A', 'B', 'C', 'D', 'E', 'F', 'G']:
+                    ws_amort[f'{col}{row}'].fill = PatternFill(start_color="90EE90", end_color="90EE90", fill_type="solid")
+                    ws_amort[f'{col}{row}'].font = Font(bold=True)
+            
+            row += 1
+        
+        # Zusammenfassung am Ende
+        row += 1
+        ws_amort[f'A{row}'] = "ZUSAMMENFASSUNG"
+        ws_amort[f'A{row}'].font = header_font
+        ws_amort[f'A{row}'].fill = orange_fill
+        ws_amort[f'A{row}'].font = white_font
+        ws_amort.merge_cells(f'A{row}:G{row}')
+        row += 1
+        
+        if payback_period < 999:
+            ws_amort[f'A{row}'] = f"Die Amortisationszeit beträgt {payback_period:.2f} Jahre."
+            ws_amort[f'A{row}'].font = Font(bold=True, size=11)
+            ws_amort.merge_cells(f'A{row}:G{row}')
+            row += 1
+            
+            ws_amort[f'A{row}'] = f"Das bedeutet, dass nach {payback_period:.2f} Jahren die kumulierten Ersparnisse die Anfangsinvestition decken."
+            ws_amort[f'A{row}'].font = Font(size=10)
+            ws_amort.merge_cells(f'A{row}:G{row}')
+        else:
+            ws_amort[f'A{row}'] = "Die Amortisationszeit wird innerhalb der Projektlaufzeit nicht erreicht."
+            ws_amort[f'A{row}'].font = Font(bold=True, size=11, color="FF0000")
+            ws_amort.merge_cells(f'A{row}:G{row}')
+            row += 1
+            
+            ws_amort[f'A{row}'] = f"Nach {project_lifetime} Jahren beträgt die kumulierte Ersparnis {cumulative_savings:.2f} €, die Investitionskosten betragen {investment_cost:.2f} €."
+            ws_amort[f'A{row}'].font = Font(size=10)
+            ws_amort.merge_cells(f'A{row}:G{row}')
+        
+        row += 1
+        ws_amort[f'A{row}'] = "Hinweis: Die jährliche Ersparnis wird durch die Kapazitätsalterung der Batterie reduziert."
+        ws_amort[f'A{row}'].font = Font(size=9, italic=True, color="666666")
+        ws_amort.merge_cells(f'A{row}:G{row}')
+        row += 1
+        
+        ws_amort[f'A{row}'] = f"Degradationsfaktor = (1 - {annual_capacity_loss}%)^(Jahr-1)"
+        ws_amort[f'A{row}'].font = Font(size=9, italic=True, color="666666")
+        ws_amort.merge_cells(f'A{row}:G{row}')
+        
+        # Spaltenbreiten anpassen
+        ws_amort.column_dimensions['A'].width = 8
+        ws_amort.column_dimensions['B'].width = 18
+        ws_amort.column_dimensions['C'].width = 25
+        ws_amort.column_dimensions['D'].width = 20
+        ws_amort.column_dimensions['E'].width = 20
+        ws_amort.column_dimensions['F'].width = 20
+        ws_amort.column_dimensions['G'].width = 35
+        
+    except Exception as e:
+        st.error(f"Fehler beim Erstellen des Amortisationszeit-Sheets: {str(e)}")
+        import traceback
+        st.error(f"Traceback: {traceback.format_exc()}")
+
+def create_deckungsbeitragsrechnung_sheet(wb, optimization_results, optimal_sim_result, cost_comparison_details, current_settings, battery_cost_curve=None, results_summary=None):
     """
     Erstellt ein detailliertes Sheet mit mehrstufiger Deckungsbeitragsrechnung
     basierend auf der ursprünglichen Excel-Logik für jede Speichergröße
@@ -1227,21 +1432,13 @@ def create_deckungsbeitragsrechnung_sheet(wb, optimization_results, optimal_sim_
         # Dynamische Optimierungslogik basierend auf ausgewähltem Kriterium
         optimization_criterion = current_settings.get('optimization_criterion', 'Deckungsbeitrag III gesamt (Barwert)')
         
-        if optimization_criterion == "Deckungsbeitrag III gesamt (Barwert)":
-            best_idx = df_results['total_db3_present_value'].idxmax()
-            criterion_name = "DB III gesamt (Barwert)"
-        elif optimization_criterion == "Deckungsbeitrag III gesamt (Nominal)":
+        # Nur DB Barwert und DB Nominal unterstützen
+        if optimization_criterion == "Deckungsbeitrag III gesamt (Nominal)":
             best_idx = df_results['total_db3_nominal'].idxmax()
             criterion_name = "DB III gesamt (Nominal)"
-        elif optimization_criterion == "Amortisationszeit":
-            best_idx = df_results['payback_period_years'].idxmin()
-            criterion_name = "Amortisationszeit"
-        elif optimization_criterion == "Return on Investment (ROI)":
-            best_idx = df_results['roi_percentage'].idxmax()
-            criterion_name = "ROI"
-        else:  # NPV als Fallback
-            best_idx = df_results['npv'].idxmax()
-            criterion_name = "NPV"
+        else:  # Default: Deckungsbeitrag III gesamt (Barwert)
+            best_idx = df_results['total_db3_present_value'].idxmax()
+            criterion_name = "DB III gesamt (Barwert)"
         
         best_option = df_results.loc[best_idx]
         battery_capacity = best_option['battery_capacity_kwh']
@@ -1273,14 +1470,32 @@ def create_deckungsbeitragsrechnung_sheet(wb, optimization_results, optimal_sim_
         # Benutzerfreundliche Anzeige der Amortisationszeit (999 Jahre = "Nicht erreicht")
         payback_display = "Nicht erreicht" if best_option['payback_period_years'] >= 999 else f"{best_option['payback_period_years']:.1f} Jahre"
         
+        # Verwende results_summary wenn verfügbar (konsistent mit UI)
+        if results_summary:
+            investment_cost_db = results_summary.get('investment_cost', best_option['investment_cost'])
+            roi_percentage_db = results_summary.get('roi_percentage')
+            if roi_percentage_db is None:
+                # Fallback-Berechnung
+                annual_savings_db = results_summary.get('annual_savings', best_option.get('annual_savings', 0))
+                project_lifetime_db = results_summary.get('project_lifetime_years', current_settings.get('project_lifetime_years', 20))
+                roi_percentage_db = (annual_savings_db * project_lifetime_db / investment_cost_db - 1) * 100 if investment_cost_db else 0
+            payback_period_db = results_summary.get('payback_period_years', best_option.get('payback_period_years', 999))
+            payback_display_db = "Nicht erreicht" if payback_period_db >= 999 else f"{payback_period_db:.1f} Jahre"
+            optimal_value_db = results_summary.get('criterion_value', best_option.get('total_db3_present_value', best_option.get('npv', 0)))
+        else:
+            investment_cost_db = best_option['investment_cost']
+            roi_percentage_db = best_option.get('roi_percentage', 0)
+            payback_display_db = payback_display
+            optimal_value_db = best_option.get('total_db3_present_value', best_option.get('npv', 0))
+        
         # Übersichtsdaten aus der optimalen Lösung
         overview_data = [
             ("Batteriekapazität", f"{battery_capacity:.1f} kWh"),
-            ("Investitionskosten", f"{best_option['investment_cost']:.0f} €"),
+            ("Investitionskosten", f"{investment_cost_db:.0f} €"),
             ("Optimierungskriterium", optimization_criterion),
-            ("Optimaler Wert", f"{best_option.get('total_db3_present_value', best_option.get('npv', 0)):.2f}"),
-            ("Amortisationszeit", payback_display),
-            ("ROI", f"{best_option['roi_percentage']:.1f}%")
+            ("Optimaler Wert", f"{optimal_value_db:.2f}"),
+            ("Amortisationszeit", payback_display_db),
+            ("ROI", f"{roi_percentage_db:.1f}%")
         ]
         
         for label, value in overview_data:
@@ -1707,7 +1922,8 @@ def create_deckungsbeitragsrechnung_sheet(wb, optimization_results, optimal_sim_
 
 def create_comprehensive_excel(optimization_results, optimal_sim_result, variable_tariff_result, 
                               current_settings, calculation_details, cost_comparison_details,
-                              consumption_series=None, pv_generation_series=None, battery_cost_curve=None):
+                              consumption_series=None, pv_generation_series=None, battery_cost_curve=None,
+                              results_summary=None):
     """
     Erstellt eine umfassende Excel-Datei mit allen Berechnungen und Grafiken
     """
@@ -1764,10 +1980,11 @@ def create_comprehensive_excel(optimization_results, optimal_sim_result, variabl
             ["5.", "Verbrauchsaufschlüsselung", "Detaillierte Verbrauchsanalyse"],
             ["6.", "Tagesbilanz", "Tägliche Energiebilanz + 15-Minuten-Aufschlüsselung"],
             ["7.", "Kostenvergleich", "Wirtschaftlichkeitsanalyse"],
-            ["8.", "Deckungsbeitragsrechnung", "Wissenschaftliche mehrstufige Deckungsbeitragsrechnung"],
-            ["9.", "PV-Erzeugungsdaten", "Detaillierte Aufschlüsselung der PV-Daten"],
-            ["10.", "Kapazitätsalterung", "Entwicklung der Batteriekapazität über die Jahre"],
-            ["11.", "Grafiken", "Visualisierungen der Ergebnisse"]
+            ["8.", "Amortisationszeit", "Detaillierte Berechnung der Amortisationszeit Jahr für Jahr"],
+            ["9.", "Deckungsbeitragsrechnung", "Wissenschaftliche mehrstufige Deckungsbeitragsrechnung"],
+            ["10.", "PV-Erzeugungsdaten", "Detaillierte Aufschlüsselung der PV-Daten"],
+            ["11.", "Kapazitätsalterung", "Entwicklung der Batteriekapazität über die Jahre"],
+            ["12.", "Grafiken", "Visualisierungen der Ergebnisse"]
         ]
         
         for i, (num, title, desc) in enumerate(toc_items, 7):
@@ -1788,8 +2005,16 @@ def create_comprehensive_excel(optimization_results, optimal_sim_result, variabl
         # Optimale Batteriegröße
         if optimization_results:
             df_results = pd.DataFrame(optimization_results)
-            best_npv_idx = df_results['npv'].idxmax()
-            best_option = df_results.loc[best_npv_idx]
+            # Verwende das gleiche Optimierungskriterium wie in der UI
+            optimization_criterion = current_settings.get('optimization_criterion', 'Deckungsbeitrag III gesamt (Barwert)')
+            # Nur DB Barwert und DB Nominal unterstützen
+            if optimization_criterion == "Deckungsbeitrag III gesamt (Nominal)":
+                best_idx = df_results['total_db3_nominal'].idxmax()
+                criterion_name = "DB III gesamt (Nominal)"
+            else:  # Default: Deckungsbeitrag III gesamt (Barwert)
+                best_idx = df_results['total_db3_present_value'].idxmax()
+                criterion_name = "DB III gesamt (Barwert)"
+            best_option = df_results.loc[best_idx]
             
             ws_summary['A3'] = "OPTIMALE BATTERIEGRÖSSE"
             ws_summary['A3'].font = header_font
@@ -1802,14 +2027,58 @@ def create_comprehensive_excel(optimization_results, optimal_sim_result, variabl
             # Benutzerfreundliche Anzeige der Amortisationszeit (999 Jahre = "Nicht erreicht")
             payback_display = "Nicht erreicht" if best_option['payback_period_years'] >= 999 else f"{best_option['payback_period_years']:.1f} Jahre"
             
+            # Bestimme den optimalen Wert basierend auf dem Kriterium
+            if optimization_criterion == "Deckungsbeitrag III gesamt (Nominal)":
+                optimal_value = best_option.get('total_db3_nominal', 0)
+                optimal_value_label = "DB III gesamt (Nominal) (€)"
+            else:  # Default: Deckungsbeitrag III gesamt (Barwert)
+                optimal_value = best_option.get('total_db3_present_value', 0)
+                optimal_value_label = "DB III gesamt (Barwert) (€)"
+            
+            # Verwende results_summary wenn verfügbar (konsistent mit UI), sonst best_option
+            if results_summary:
+                optimal_capacity_display = results_summary.get('optimal_capacity', best_option['battery_capacity_kwh'])
+                investment_cost_display = results_summary.get('investment_cost', best_option['investment_cost'])
+                roi_percentage_display = results_summary.get('roi_percentage')
+                payback_period_display = results_summary.get('payback_period_years')
+                irr_display = results_summary.get('irr_percentage')
+                criterion_value_display = results_summary.get('criterion_value', optimal_value)
+                criterion_name_display = results_summary.get('criterion_name', criterion_name)
+                
+                # Berechne ROI falls nicht in results_summary
+                if roi_percentage_display is None:
+                    annual_savings_display = results_summary.get('annual_savings', best_option.get('annual_savings', 0))
+                    roi_percentage_display = (annual_savings_display * project_lifetime / investment_cost_display - 1) * 100 if investment_cost_display else 0
+                
+                # Verwende payback_period aus results_summary oder best_option
+                if payback_period_display is None:
+                    payback_period_display = best_option.get('payback_period_years', 999)
+                payback_display = "Nicht erreicht" if payback_period_display >= 999 else f"{payback_period_display:.1f} Jahre"
+                
+                # Verwende IRR aus results_summary oder best_option
+                if irr_display is None:
+                    irr_display = best_option.get('irr_percentage', 'N/A')
+            else:
+                # Fallback auf best_option wenn results_summary nicht verfügbar
+                optimal_capacity_display = best_option['battery_capacity_kwh']
+                investment_cost_display = best_option['investment_cost']
+                criterion_value_display = optimal_value
+                criterion_name_display = criterion_name
+                annual_savings_display = best_option.get('annual_savings', 0)
+                roi_percentage_display = (annual_savings_display * project_lifetime / investment_cost_display - 1) * 100 if investment_cost_display else 0
+                payback_period_display = best_option.get('payback_period_years', 999)
+                payback_display = "Nicht erreicht" if payback_period_display >= 999 else f"{payback_period_display:.1f} Jahre"
+                irr_display = best_option.get('irr_percentage', 'N/A')
+            
             summary_data = [
                 ["Kennzahl", "Wert", "Einheit", "Bedeutung"],
-                ["Optimale Kapazität", best_option['battery_capacity_kwh'], "kWh", "Wirtschaftlichste Batteriegröße"],
-                ["Maximaler NPV", best_option['npv'], "€", "Net Present Value über Projektlaufzeit"],
+                ["Optimale Kapazität", optimal_capacity_display, "kWh", "Wirtschaftlichste Batteriegröße"],
+                ["Optimierungskriterium", criterion_name_display, "-", "Verwendetes Optimierungskriterium"],
+                ["Optimaler Wert", criterion_value_display, "€" if "€" in optimal_value_label else ("Jahre" if "Jahre" in optimal_value_label else "%"), optimal_value_label],
                 ["Amortisationszeit", payback_display, "", "Zeit bis zur Kostendeckung"],
-                ["Anfangsinvestition", best_option['investment_cost'], "€", "Gesamtinvestition in Batteriespeicher"],
-                [f"ROI über {project_lifetime} Jahre", (best_option['annual_savings'] * project_lifetime / best_option['investment_cost'] - 1) * 100, "%", "Return on Investment"],
-                ["IRR (Interner Zinsfuß)", best_option.get('irr_percentage', 'N/A'), "%", "Jährliche Rendite der Investitation"]
+                ["Anfangsinvestition", investment_cost_display, "€", "Gesamtinvestition in Batteriespeicher"],
+                [f"ROI über {project_lifetime} Jahre", roi_percentage_display, "%", "Return on Investment"],
+                ["IRR (Interner Zinsfuß)", irr_display, "%", "Jährliche Rendite der Investitation"]
             ]
             
             for i, row in enumerate(summary_data):
@@ -1892,8 +2161,14 @@ def create_comprehensive_excel(optimization_results, optimal_sim_result, variabl
         try:
             if optimization_results:
                 df_results_params = pd.DataFrame(optimization_results)
-                best_npv_idx_params = df_results_params['npv'].idxmax()
-                best_option_params = df_results_params.loc[best_npv_idx_params]
+                # Verwende das gleiche Optimierungskriterium wie in der UI
+                optimization_criterion_params = current_settings.get('optimization_criterion', 'Deckungsbeitrag III gesamt (Barwert)')
+                # Nur DB Barwert und DB Nominal unterstützen
+                if optimization_criterion_params == "Deckungsbeitrag III gesamt (Nominal)":
+                    best_idx_params = df_results_params['total_db3_nominal'].idxmax()
+                else:  # Default: Deckungsbeitrag III gesamt (Barwert)
+                    best_idx_params = df_results_params['total_db3_present_value'].idxmax()
+                best_option_params = df_results_params.loc[best_idx_params]
                 optimal_capacity_kwh_params = best_option_params['battery_capacity_kwh']
                 
                 from data_import import load_battery_tech_params
@@ -3256,8 +3531,14 @@ def create_comprehensive_excel(optimization_results, optimal_sim_result, variabl
             if np.isnan(irr) and optimization_results:
                 try:
                     df_results = pd.DataFrame(optimization_results)
-                    best_npv_idx = df_results['npv'].idxmax()
-                    irr = df_results.loc[best_npv_idx, 'irr_percentage']
+                    # Verwende das gleiche Optimierungskriterium wie in der UI
+                    optimization_criterion_irr = current_settings.get('optimization_criterion', 'Deckungsbeitrag III gesamt (Barwert)')
+                    # Nur DB Barwert und DB Nominal unterstützen
+                    if optimization_criterion_irr == "Deckungsbeitrag III gesamt (Nominal)":
+                        best_idx_irr = df_results['total_db3_nominal'].idxmax()
+                    else:  # Default: Deckungsbeitrag III gesamt (Barwert)
+                        best_idx_irr = df_results['total_db3_present_value'].idxmax()
+                    irr = df_results.loc[best_idx_irr, 'irr_percentage']
                 except:
                     irr = np.nan
             
@@ -3577,10 +3858,13 @@ def create_comprehensive_excel(optimization_results, optimal_sim_result, variabl
             ws_costs.column_dimensions['F'].width = 35
             ws_costs.column_dimensions['G'].width = 30
         
-        # 9. DECKUNGSBEITRAGSRECHNUNG
-        create_deckungsbeitragsrechnung_sheet(wb, optimization_results, optimal_sim_result, cost_comparison_details, current_settings, battery_cost_curve)
+        # 8. AMORTISATIONSZEIT
+        create_amortisationszeit_sheet(wb, optimization_results, optimal_sim_result, cost_comparison_details, current_settings, battery_cost_curve, results_summary)
         
-        # 9. PV-ERZEUGUNGSDATEN
+        # 9. DECKUNGSBEITRAGSRECHNUNG
+        create_deckungsbeitragsrechnung_sheet(wb, optimization_results, optimal_sim_result, cost_comparison_details, current_settings, battery_cost_curve, results_summary)
+        
+        # 10. PV-ERZEUGUNGSDATEN
         ws_pv = wb.create_sheet("PV-Erzeugungsdaten")
         
         ws_pv['A1'] = "PV-ERZEUGUNGSDATEN - DETAILLIERTE AUFSCHLÜSSELUNG"
@@ -3687,11 +3971,17 @@ def create_comprehensive_excel(optimization_results, optimal_sim_result, variabl
         # 10. KAPAZITÄTSALTERUNG
         if current_settings and 'annual_capacity_loss_percent' in current_settings:
             try:
-                # Finde die optimale Batteriekapazität (höchster NPV)
+                # Finde die optimale Batteriekapazität basierend auf dem Optimierungskriterium
                 if optimization_results:
                     df_results = pd.DataFrame(optimization_results)
-                    best_npv_idx = df_results['npv'].idxmax()
-                    battery_capacity = df_results.loc[best_npv_idx, 'battery_capacity_kwh']
+                    # Verwende das gleiche Optimierungskriterium wie in der UI
+                    optimization_criterion_cap = current_settings.get('optimization_criterion', 'Deckungsbeitrag III gesamt (Barwert)')
+                    # Nur DB Barwert und DB Nominal unterstützen
+                    if optimization_criterion_cap == "Deckungsbeitrag III gesamt (Nominal)":
+                        best_idx_cap = df_results['total_db3_nominal'].idxmax()
+                    else:  # Default: Deckungsbeitrag III gesamt (Barwert)
+                        best_idx_cap = df_results['total_db3_present_value'].idxmax()
+                    battery_capacity = df_results.loc[best_idx_cap, 'battery_capacity_kwh']
                 else:
                     battery_capacity = 10.0  # Fallback
                 
@@ -3881,7 +4171,8 @@ def create_comprehensive_excel(optimization_results, optimal_sim_result, variabl
 
 def excel_export_section(optimization_results, optimal_sim_result=None, variable_tariff_result=None, 
                         current_settings=None, calculation_details=None, cost_comparison_details=None,
-                        consumption_series=None, pv_generation_series=None, battery_cost_curve=None):
+                        consumption_series=None, pv_generation_series=None, battery_cost_curve=None,
+                        results_summary=None):
     """
     Excel Export Sektion für die UI - EINFACH UND DIREKT
     """
@@ -3906,7 +4197,8 @@ def excel_export_section(optimization_results, optimal_sim_result=None, variable
                 cost_comparison_details=cost_comparison_details,
                 consumption_series=consumption_series,
                 pv_generation_series=pv_generation_series,
-                battery_cost_curve=battery_cost_curve
+                battery_cost_curve=battery_cost_curve,
+                results_summary=results_summary
             )
             
             if buffer:
