@@ -38,6 +38,8 @@ Falls für eine exakte Kapazität kein Eintrag existiert, wird der nächstliegen
 
 ## Nutzung
 
+### Lokale Installation
+
 1.  **Projektstruktur einrichten**:
     Erstellen Sie die folgenden Dateien in Ihrem Projektverzeichnis:
     *   `ui.py` (Hauptanwendung)
@@ -64,6 +66,16 @@ Falls für eine exakte Kapazität kein Eintrag existiert, wird der nächstliegen
 
 5.  **Interaktion im Browser**:
     Die Anwendung öffnet sich automatisch in Ihrem Standard-Webbrowser. Sie können nun Ihre Excel-Datei hochladen, Parameter in der Seitenleiste anpassen und verschiedene Simulationsszenarien auswählen und starten.
+
+### Online-Deployment (Streamlit Cloud)
+
+Die Anwendung kann auch online auf Streamlit Cloud betrieben werden:
+
+1. **GitHub Repository**: Der Code ist bereits auf GitHub verfügbar
+2. **Streamlit Cloud**: Folgen Sie der Anleitung in `STREAMLIT_CLOUD_SETUP.md`
+3. **App-URL**: Nach dem Deployment erhalten Sie eine öffentliche URL für Ihre App
+
+Siehe `STREAMLIT_CLOUD_SETUP.md` für detaillierte Anweisungen.
 
 ## Projektstruktur
 
