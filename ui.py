@@ -1,16 +1,20 @@
 import sys
 import io as io_module
 
-# Windows-Konsolencodierung auf UTF-8 setzen
+# Windows-Konsolencodierung auf UTF-8 setzen (nur auf Windows)
 if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding='utf-8')
         sys.stderr.reconfigure(encoding='utf-8')
     except (AttributeError, io_module.UnsupportedOperation):
         # Fallback für ältere Python-Versionen oder nicht unterstützte Streams
-        import codecs
-        sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'ignore')
-        sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'ignore')
+        try:
+            import codecs
+            sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'ignore')
+            sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'ignore')
+        except Exception:
+            # Ignoriere Fehler auf nicht-Windows-Systemen (z.B. Streamlit Cloud)
+            pass
 
 import streamlit as st
 import pandas as pd

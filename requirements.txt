@@ -6,4 +6,5 @@ streamlit>=1.20.0
 kaleido>=1.0.0
 Pillow>=8.0.0
 holidays>=0.30
-matplotlib>=3.5.0 
+matplotlib>=3.5.0
+streamlit-aggrid>=0.3.0 
