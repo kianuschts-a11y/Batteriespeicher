@@ -3,6 +3,7 @@ import numpy as np
 from datetime import datetime, timedelta
 import holidays
 import io
+import os
 
 # Streamlit Caching für teure Excel-Ladeoperationen
 try:
@@ -1555,6 +1556,11 @@ def load_battery_tech_params(xlsm_path: str = "Batteriespeicherkosten.xlsm") -> 
       { int_kapazitaet_kwh: {"max_charge_kw": float, "max_discharge_kw": float} }
     """
     try:
+        # Prüfe ob Datei existiert
+        if not os.path.exists(xlsm_path):
+            print(f"[TechParams] Datei nicht gefunden: {xlsm_path}")
+            return None
+        
         # Versuche, das relevante Blatt automatisch zu finden: suche das erste Blatt mit passenden Spalten
         xls = pd.ExcelFile(xlsm_path, engine="openpyxl")
         print(f"[TechParams] Datei geöffnet: {xlsm_path}")

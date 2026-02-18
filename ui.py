@@ -1225,9 +1225,15 @@ def run_analysis_job(payload: dict, status_placeholder=None, progress_bar=None):
     if battery_cost_curve is None:
         raise ValueError("Batteriekostenkurven-Datei konnte nicht geladen werden.")
 
-    battery_tech_params = load_battery_tech_params("Batteriespeicherkosten.xlsm")
-    if battery_tech_params is None:
-        raise ValueError("Technische Batterieparameter konnten nicht geladen werden.")
+    # Versuche technische Parameter zu laden, aber mache es optional
+    try:
+        battery_tech_params = load_battery_tech_params("Batteriespeicherkosten.xlsm")
+        if battery_tech_params is None:
+            st.warning("⚠️ Technische Batterieparameter konnten nicht geladen werden. Verwende Standardwerte.")
+            battery_tech_params = {}
+    except Exception as e:
+        st.warning(f"⚠️ Technische Batterieparameter konnten nicht geladen werden: {str(e)}. Verwende Standardwerte.")
+        battery_tech_params = {}
 
     scaled_consumption_series = consumption_series
     scaled_pv_generation_series = pv_generation_series
