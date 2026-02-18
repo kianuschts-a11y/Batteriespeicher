@@ -1,2 +1,0 @@
-# Diese Datei wird von Streamlit Cloud verwendet, um zusätzliche System-Pakete zu installieren
-# Falls benötigt, können hier Pakete hinzugefügt werden
